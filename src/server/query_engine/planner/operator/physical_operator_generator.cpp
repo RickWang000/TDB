@@ -1,6 +1,8 @@
 #include "include/query_engine/planner/operator/physical_operator_generator.h"
 
+#include <cmath>
 #include <utility>
+#include "include/query_engine/planner/node/logical_node.h"
 #include "include/query_engine/planner/operator/physical_operator.h"
 #include "include/query_engine/planner/node/table_get_logical_node.h"
 #include "include/query_engine/planner/operator/table_scan_physical_operator.h"
@@ -21,10 +23,9 @@
 #include "include/query_engine/planner/node/explain_logical_node.h"
 #include "include/query_engine/planner/operator/explain_physical_operator.h"
 #include "include/query_engine/planner/node/join_logical_node.h"
-#include "include/query_engine/planner/operator/join_physical_operator.h"
-#include "include/query_engine/planner/node/group_by_logical_node.h"
 #include "include/query_engine/planner/operator/group_by_physical_operator.h"
 #include "common/log/log.h"
+#include "include/storage_engine/recorder/table.h"
 
 using namespace std;
 
@@ -66,7 +67,7 @@ RC PhysicalOperatorGenerator::create(LogicalNode &logical_operator, unique_ptr<P
     case LogicalNodeType::EXPLAIN: {
       return create_plan(static_cast<ExplainLogicalNode &>(logical_operator), oper, is_delete);
     }
-
+    // TODO [Lab3] 实现JoinNode到JoinOperator的转换
     case LogicalNodeType::JOIN:
     case LogicalNodeType::GROUP_BY: {
       return RC::UNIMPLENMENT;
@@ -78,17 +79,41 @@ RC PhysicalOperatorGenerator::create(LogicalNode &logical_operator, unique_ptr<P
   }
 }
 
+// TODO [Lab2] 
+// 在原有的实现中，会直接生成TableScanOperator对所需的数据进行全表扫描，但其实在生成执行计划时，我们可以进行简单的优化：
+// 首先检查扫描的table是否存在索引，如果存在可以使用的索引，那么我们可以直接生成IndexScanOperator来减少磁盘的扫描
 RC PhysicalOperatorGenerator::create_plan(
     TableGetLogicalNode &table_get_oper, unique_ptr<PhysicalOperator> &oper, bool is_delete)
 {
   vector<unique_ptr<Expression>> &predicates = table_get_oper.predicates();
+  Index *index = nullptr;
+  // TODO [Lab2] 生成IndexScanOperator的准备工作,主要包含:
+  // 1. 通过predicates获取具体的值表达式， 目前应该只支持等值表达式的索引查找
+    // example:
+    //  if(predicate.type == ExprType::COMPARE){
+    //   auto compare_expr = dynamic_cast<ComparisonExpr*>(predicate.get());
+    //   if(compare_expr->comp != EQUAL_TO) continue;
+    //   [process]
+    //  }
+  // 2. 对应上面example里的process阶段， 找到等值表达式中对应的FieldExpression和ValueExpression(左值和右值)
+  // 通过FieldExpression找到对应的Index, 通过ValueExpression找到对应的Value
 
-  Table *table = table_get_oper.table();
-  auto table_scan_oper = new TableScanPhysicalOperator(table, table_get_oper.table_alias(), table_get_oper.readonly());
-  table_scan_oper->isdelete_ = is_delete;
-  table_scan_oper->set_predicates(std::move(predicates));
-  oper = unique_ptr<PhysicalOperator>(table_scan_oper);
-  LOG_TRACE("use table scan");
+  if(index == nullptr){
+    Table *table = table_get_oper.table();
+    auto table_scan_oper = new TableScanPhysicalOperator(table, table_get_oper.table_alias(), table_get_oper.readonly());
+    table_scan_oper->isdelete_ = is_delete;
+    table_scan_oper->set_predicates(std::move(predicates));
+    oper = unique_ptr<PhysicalOperator>(table_scan_oper);
+    LOG_TRACE("use table scan");
+  }else{
+    // TODO [Lab2] 生成IndexScanOperator, 并放置在算子树上，下面是一个实现参考，具体实现可以根据需要进行修改
+    // IndexScanner 在设计时，考虑了范围查找索引的情况，但此处我们只需要考虑单个键的情况
+    // const Value &value = value_expression->get_value();
+    // IndexScanPhysicalOperator *operator =
+    //              new IndexScanPhysicalOperator(table, index, readonly, &value, true, &value, true);
+    // oper = unique_ptr<PhysicalOperator>(operator);
+  }
+
   return RC::SUCCESS;
 }
 
@@ -291,15 +316,9 @@ RC PhysicalOperatorGenerator::create_plan(
   return rc;
 }
 
-// TODO [Lab3]
+// TODO [Lab3] 根据LogicalNode生成对应的PhyiscalOperator
 RC PhysicalOperatorGenerator::create_plan(
-    JoinLogicalNode &join_oper, unique_ptr<PhysicalOperator> &oper, bool is_delete)
+    JoinLogicalNode &join_oper, unique_ptr<PhysicalOperator> &oper)
 {
-  return RC::UNIMPLENMENT;
-}
-
-// TODO [Lab3]
-RC PhysicalOperatorGenerator::create_plan(
-    GroupByLogicalNode &logical_oper, std::unique_ptr<PhysicalOperator> &oper, bool is_delete) {
   return RC::UNIMPLENMENT;
 }
