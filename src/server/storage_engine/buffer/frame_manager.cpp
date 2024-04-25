@@ -53,7 +53,20 @@ Frame *FrameManager::get(int file_desc, PageNum page_num)
  */
 int FrameManager::evict_frames(int count, std::function<RC(Frame *frame)> evict_action)
 {
-  return 0;
+  int evicted = 0;
+  std::lock_guard<std::mutex> lock_guard(lock_);
+  auto fetcher = [this, &evicted, &evict_action, count](const FrameId &frame_id, Frame *const frame) -> bool {
+    if (frame->pin_count() == 0) {
+      if (evict_action(frame) == RC::SUCCESS) {
+        frames_.remove(frame_id);
+        allocator_.free(frame);
+        evicted++;
+      }
+    }
+    return evicted < count;
+  };
+  frames_.foreach (fetcher);
+  return evicted;
 }
 
 Frame *FrameManager::get_internal(const FrameId &frame_id)

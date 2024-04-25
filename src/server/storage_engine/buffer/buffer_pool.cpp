@@ -213,11 +213,29 @@ RC FileBufferPool::flush_page(Frame &frame)
  */
 RC FileBufferPool::flush_page_internal(Frame &frame)
 {
-//  1. 获取页面Page
-//  2. 计算该Page在文件中的偏移量
-//  3. 写入数据到文件的目标位置
-//  4. 清除frame的脏标记
-//  5. 记录和返回成功
+  //  1. 获取页面Page
+  Page &page = frame.page();
+
+  //  2. 计算该Page在文件中的偏移量
+  int offset = BP_PAGE_SIZE * page.page_num;
+
+  //  3. 写入数据到文件的目标位置
+  if (lseek(file_desc_, offset, SEEK_SET) == -1) {
+    LOG_ERROR("Failed to flush page %s:%d, due to failed to lseek:%s.", file_name_.c_str(), page.page_num, strerror(errno));
+    return RC::IOERR_SEEK;
+  }
+  int ret = writen(file_desc_, &page, BP_PAGE_SIZE);
+  if (ret != 0) {
+    LOG_ERROR("Failed to flush page %s, file_desc:%d, page num:%d, due to failed to write data:%s, ret=%d, page count=%d",
+              file_name_.c_str(), file_desc_, page.page_num, strerror(errno), ret, file_header_->allocated_pages);
+    return RC::IOERR_WRITE;
+  }
+
+  //  4. 清除frame的脏标记
+  frame.clear_dirty();
+
+  //  5. 记录和返回成功
+  LOG_DEBUG("Successfully flush page %s:%d", file_name_.c_str(), page.page_num);
   return RC::SUCCESS;
 }
 
@@ -226,6 +244,48 @@ RC FileBufferPool::flush_page_internal(Frame &frame)
  */
 RC FileBufferPool::evict_page(PageNum page_num, Frame *buf)
 {
+  std::scoped_lock lock_guard(lock_);
+  auto evict_action = [this](Frame *frame) {
+    if (!frame->dirty()) {
+      return RC::SUCCESS;
+    }
+    RC rc = RC::SUCCESS;
+    if (frame->file_desc() == file_desc_) {
+      rc = this->flush_page_internal(*frame);
+    } else {
+      rc = bp_manager_.flush_page(*frame);
+    }
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to aclloc block due to failed to flush old block. rc=%s", strrc(rc));
+    }
+    return rc;
+  };
+
+  if (buf->page_num() == page_num) {
+    if (buf->dirty()) {
+      if (flush_page_internal(*buf) != RC::SUCCESS) {
+        LOG_ERROR("Failed to flush page %s:%d, due to failed to flush.", file_name_.c_str(), page_num);
+        return RC::IOERR_WRITE;
+      }
+    }
+    frame_manager_.evict_frames(1, evict_action);
+    return RC::SUCCESS;
+  }
+
+  Frame *frame = frame_manager_.get(file_desc_, page_num);
+  if (frame == nullptr) {
+    LOG_ERROR("Failed to evict page %s:%d, due to no frame.", file_name_.c_str(), page_num);
+    return RC::BUFFERPOOL_NOBUF;
+  }
+
+  if (frame->dirty()) {
+    if (flush_page_internal(*frame) != RC::SUCCESS) {
+      LOG_ERROR("Failed to flush page %s:%d, due to failed to flush.", file_name_.c_str(), page_num);
+      return RC::IOERR_WRITE;
+    }
+  }
+
+  frame_manager_.evict_frames(1, evict_action);
   return RC::SUCCESS;
 }
 /**
@@ -233,6 +293,24 @@ RC FileBufferPool::evict_page(PageNum page_num, Frame *buf)
  */
 RC FileBufferPool::evict_all_pages()
 {
+  std::scoped_lock lock_guard(lock_);
+  auto evict_action = [this](Frame *frame) {
+    if (!frame->dirty()) {
+      return RC::SUCCESS;
+    }
+    RC rc = RC::SUCCESS;
+    if (frame->file_desc() == file_desc_) {
+      rc = this->flush_page_internal(*frame);
+    } else {
+      rc = bp_manager_.flush_page(*frame);
+    }
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to aclloc block due to failed to flush old block. rc=%s", strrc(rc));
+    }
+    return rc;
+  };
+
+  frame_manager_.evict_frames(file_header_->allocated_pages, evict_action);
   return RC::SUCCESS;
 }
 
@@ -467,6 +545,13 @@ RC BufferPoolManager::close_file(const char *_file_name)
  */
 RC BufferPoolManager::flush_page(Frame &frame)
 {
+  std::scoped_lock lock_guard(lock_);
+  auto iter = fd_buffer_pools_.find(frame.file_desc());
+  if (iter == fd_buffer_pools_.end()) {
+    LOG_ERROR("Failed to flush page, due to no buffer pool for file desc %d", frame.file_desc());
+    return RC::BUFFERPOOL_NOBUF;
+  }
+  iter->second->flush_page(frame);
   return RC::SUCCESS;
 }
 
