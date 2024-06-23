@@ -90,8 +90,25 @@ RC BplusTreeIndex::close()
  */
 RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
 {
-  // TODO [Lab2] 增加索引项的处理逻辑
-  return RC::SUCCESS;
+  // 增加索引项的处理逻辑
+  std::vector<std::string> keys;
+  for (int i = 0; i < multi_field_metas_.size(); i++) {
+    std::string key(record + multi_field_metas_[i].offset(), multi_field_metas_[i].len());
+    keys.emplace_back(key);
+  }
+  std::vector<const char*> keyPointers;
+  for (const auto& key : keys) {
+    keyPointers.push_back(key.c_str());
+  }
+
+  if (index_meta_.is_unique()) {
+    std::list<RID> rids;
+    if (index_handler_.get_entry(keyPointers.data(), rids) == RC::SUCCESS) {
+      return RC::RECORD_DUPLICATE_KEY;
+    }
+  }
+  RC rc = index_handler_.insert_entry(keyPointers.data(), rid, multi_field_metas_.size());
+  return rc;
 }
 
 /**
@@ -100,8 +117,19 @@ RC BplusTreeIndex::insert_entry(const char *record, const RID *rid)
  */
 RC BplusTreeIndex::delete_entry(const char *record, const RID *rid)
 {
-  // TODO [Lab2] 增加索引项的处理逻辑
-  return RC::SUCCESS;
+  // 增加索引项的处理逻辑
+  std::vector<std::string> keys;
+  for (int i = 0; i < multi_field_metas_.size(); i++) {
+    std::string key(record + multi_field_metas_[i].offset(), multi_field_metas_[i].len());
+    keys.emplace_back(key);
+  }
+  std::vector<const char*> keyPointers;
+  for (const auto& key : keys) {
+    keyPointers.push_back(key.c_str());
+  }
+
+  RC rc = index_handler_.delete_entry(keyPointers.data(), rid, multi_field_metas_.size());
+  return rc;
 }
 
 IndexScanner *BplusTreeIndex::create_scanner(

@@ -26,6 +26,9 @@
 #include "include/query_engine/planner/operator/group_by_physical_operator.h"
 #include "common/log/log.h"
 #include "include/storage_engine/recorder/table.h"
+#include "include/query_engine/structor/expression/comparison_expression.h"
+#include "include/query_engine/structor/expression/field_expression.h"
+#include "include/query_engine/structor/expression/value_expression.h"
 
 using namespace std;
 
@@ -97,7 +100,25 @@ RC PhysicalOperatorGenerator::create_plan(
     //  }
   // 2. 对应上面example里的process阶段， 找到等值表达式中对应的FieldExpression和ValueExpression(左值和右值)
   // 通过FieldExpression找到对应的Index, 通过ValueExpression找到对应的Value
-
+  for (auto &predicate : predicates) {
+    if (predicate->type() == ExprType::COMPARISON) {
+      auto compare_expr = dynamic_cast<ComparisonExpr *>(predicate.get());
+      if (compare_expr->comp() != CompOp::EQUAL_TO) {
+        continue;
+      }
+      auto left_expr = compare_expr->left().get();
+      auto right_expr = compare_expr->right().get();
+      if (left_expr->type() == ExprType::FIELD && right_expr->type() == ExprType::VALUE) {
+        auto field_expr = dynamic_cast<FieldExpr *>(left_expr);
+        auto value_expr = dynamic_cast<ValueExpr *>(right_expr);
+        if (field_expr->table_name() == table_get_oper.table_alias()) {
+          //通过table类的findindexbyfield函数找到对应的index并加入到index中
+          index = table_get_oper.table()->find_index_by_field(field_expr->field_name());
+          }
+          break;
+      }
+    }
+  }
   if(index == nullptr){
     Table *table = table_get_oper.table();
     auto table_scan_oper = new TableScanPhysicalOperator(table, table_get_oper.table_alias(), table_get_oper.readonly());

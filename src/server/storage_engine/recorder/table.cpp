@@ -347,7 +347,15 @@ RC Table::insert_record(Record &record)
     return rc;
   }
 
-  // TODO [Lab2] 增加索引的处理逻辑
+  // [Lab2] 增加索引的处理逻辑
+  for (Index *index : indexes_) {
+    rc = index->insert_entry(record.data(), &record.rid());
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to insert record into index. table=%s, index=%s, rc=%s",
+                name(), index->index_meta().name(), strrc(rc));
+      return rc;
+    }
+  }
 
   return rc;
 }
@@ -356,7 +364,15 @@ RC Table::delete_record(const Record &record)
 {
   RC rc = RC::SUCCESS;
 
-  // TODO [Lab2] 增加索引的处理逻辑
+  // [Lab2] 增加索引的处理逻辑
+  for (Index *index : indexes_) {
+    rc = index->delete_entry(record.data(), &record.rid());
+    if (rc != RC::SUCCESS) {
+      LOG_ERROR("Failed to delete record from index. table=%s, index=%s, rc=%s",
+                name(), index->index_meta().name(), strrc(rc));
+      return rc;
+    }
+  }
 
   rc = record_handler_->delete_record(&record.rid());
   return rc;
