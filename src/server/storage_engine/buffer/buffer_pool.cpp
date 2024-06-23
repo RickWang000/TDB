@@ -240,6 +240,26 @@ RC FileBufferPool::flush_page_internal(Frame &frame)
 }
 
 /**
+ * 将所有的脏页刷盘
+ */
+RC FileBufferPool::flush_all_pages()
+{
+  std::scoped_lock lock_guard(lock_);
+  RC rc = RC::SUCCESS;
+  for (Frame *frame : frame_manager_.find_list(file_desc_)) {
+    if (frame->dirty()) {
+      RC _rc = flush_page_internal(*frame);
+      if (_rc != RC::SUCCESS) {
+        LOG_ERROR("Failed to flush page %s:%d, rc=%s", file_name_.c_str(), frame->page_num(), strrc(_rc));
+        rc = _rc;
+      }
+    }
+    frame->unpin();
+  }
+  return rc;
+}
+
+/**
  * TODO [Lab1] 需要同学们实现某个指定页面的驱逐
  */
 RC FileBufferPool::evict_page(PageNum page_num, Frame *buf)
@@ -378,6 +398,17 @@ int FileBufferPool::file_desc() const
 
 RC FileBufferPool::recover_page(PageNum page_num)
 {
+  int byte = 0, bit = 0;
+  byte = page_num / 8;
+  bit = page_num % 8;
+
+  std::scoped_lock lock_guard(lock_);
+  if (!(file_header_->bitmap[byte] & (1 << bit))) {
+    file_header_->bitmap[byte] |= (1 << bit);
+    file_header_->allocated_pages++;
+    file_header_->page_count++;
+    hdr_frame_->mark_dirty();
+  }
   return RC::SUCCESS;
 }
 
