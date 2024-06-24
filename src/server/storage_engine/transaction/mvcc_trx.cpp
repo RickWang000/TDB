@@ -115,6 +115,22 @@ RC MvccTrx::insert_record(Table *table, Record &record)
 {
   RC rc = RC::SUCCESS;
   // TODO [Lab4] 需要同学们补充代码实现记录的插入，相关提示见文档
+  // 获取事务ID
+  int32_t trx_id = this->trx_id_;
+
+  // 配置记录的begin_xid和end_xid
+  Field begin_xid_field, end_xid_field;
+  trx_fields(table, begin_xid_field, end_xid_field);
+
+  // 设置begin_xid为负的事务ID，表示此记录尚未提交，仅对当前事务可见
+  begin_xid_field.set_int(record, -trx_id);
+  end_xid_field.set_int(record, std::numeric_limits<int32_t>::max());
+
+  // 插入记录到表中
+  rc = table->insert_record(record);
+  if (rc != RC::SUCCESS) {
+      return rc;
+  }
 
   pair<OperationSet::iterator, bool> ret = operations_.insert(Operation(Operation::Type::INSERT, table, record.rid()));
   if (!ret.second) {
@@ -128,6 +144,15 @@ RC MvccTrx::delete_record(Table *table, Record &record)
 {
   RC rc = RC::SUCCESS;
   // TODO [Lab4] 需要同学们补充代码实现逻辑上的删除，相关提示见文档
+  // 获取事务ID
+  int32_t trx_id = this->trx_id_;
+
+  // 获取记录的版本字段
+  Field begin_xid_field, end_xid_field;
+  trx_fields(table, begin_xid_field, end_xid_field);
+
+  // 设置end_xid为负的事务ID，表示记录即将被删除，但尚未提交
+  end_xid_field.set_int(record, -trx_id);
 
   operations_.insert(Operation(Operation::Type::DELETE, table, record.rid()));
   return rc;
@@ -146,6 +171,54 @@ RC MvccTrx::visit_record(Table *table, Record &record, bool readonly)
 {
   RC rc = RC::SUCCESS;
   // TODO [Lab4] 需要同学们补充代码实现记录是否可见的判断，相关提示见文档
+  // 获取当前事务ID
+  int32_t trx_id = this->trx_id_;
+
+  // 获取记录的版本字段
+  Field begin_xid_field, end_xid_field;
+  trx_fields(table, begin_xid_field, end_xid_field);
+
+  int32_t begin_xid = begin_xid_field.get_int(record);
+  int32_t end_xid = end_xid_field.get_int(record);
+
+  LOG_DEFAULT("visit record. trx id=%d, begin xid=%d, end xid=%d, readonly=%d", trx_id, begin_xid, end_xid, readonly);
+
+
+  if (begin_xid < 0) {// 未提交的插入事务
+    if (begin_xid == -trx_id) {// 是当前事务
+      LOG_DEFAULT("uncommitted insert , current, visible");
+      rc = RC::SUCCESS;
+    } else {// 是其它事务
+      if (readonly) {// 只读事务
+        LOG_DEFAULT("uncommitted insert, not current, readonly, invisible");
+        rc = RC::RECORD_INVISIBLE;
+      } else {// 读写事务
+        LOG_DEFAULT("uncommitted insert, not current, readwrite, conflict");
+        rc = RC::LOCKED_CONCURRENCY_CONFLICT;
+      }
+    }
+  } else if (end_xid < 0) {// 未提交的删除事务
+    if (end_xid == -trx_id) {// 是当前事务
+      LOG_DEFAULT("uncommitted delete, current, invisible");
+      rc = RC::RECORD_INVISIBLE;
+    } else {// 是其它事务
+      if (readonly) {// 只读事务
+        LOG_DEFAULT("uncommitted delete, not current, readonly, visible");
+        rc = RC::SUCCESS;
+      } else {// 读写事务
+        LOG_DEFAULT("uncommitted delete, not current, readwrite, conflict");
+        rc = RC::LOCKED_CONCURRENCY_CONFLICT;
+      }
+    }
+  } else {// 已提交的事务
+    if (begin_xid <= trx_id && trx_id <= end_xid) {// 在事务的生命周期内
+      LOG_DEFAULT("committed trx, visible");
+      rc = RC::SUCCESS;
+    } else {// 不在事务的生命周期内
+      LOG_DEFAULT("committed trx, invisible");
+      rc = RC::RECORD_INVISIBLE;
+    }
+  }
 
   return rc;
 }
