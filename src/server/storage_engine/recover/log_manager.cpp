@@ -13,6 +13,7 @@ RC LogEntryIterator::next()
   RC rc = log_file_->read(reinterpret_cast<char *>(&header), sizeof(header));
   if (rc != RC::SUCCESS) {
     if (log_file_->eof()) {
+      log_entry_ = nullptr;
       return RC::RECORD_EOF;
     }
     LOG_WARN("failed to read log header. rc=%s", strrc(rc));
@@ -124,6 +125,41 @@ RC LogManager::recover(Db *db)
   ASSERT(trx_manager != nullptr, "cannot do recover that trx_manager is null");
 
   // TODO [Lab5] 需要同学们补充代码，相关提示见文档
+  // 初始化一个事务状态追踪器，初始值为false
+  std::unordered_map<int32_t, bool> trx_status = std::unordered_map<int32_t, bool>();
+  LogEntryIterator log_entry_iter = LogEntryIterator();
+  log_entry_iter.init(*log_file_);
+  log_entry_iter.next();
+  int j=0;
+  while (log_entry_iter.valid())
+  {
+    //事务开始的日志项
+    if (log_entry_iter.log_entry().log_type() == LogEntryType::MTR_BEGIN)
+    {
+      trx_manager->create_trx(log_entry_iter.log_entry().trx_id())->redo(db, log_entry_iter.log_entry());
+      LOG_DEFAULT("trx_id:%d,begin", log_entry_iter.log_entry().trx_id());
+    } else if (log_entry_iter.log_entry().log_type() == LogEntryType::MTR_COMMIT) {//事务提交的日志项
+      trx_manager->find_trx(log_entry_iter.log_entry().trx_id())->redo(db, log_entry_iter.log_entry());
+      trx_status[log_entry_iter.log_entry().trx_id()] = true;
+      LOG_DEFAULT("trx_id:%d,commit", log_entry_iter.log_entry().trx_id());
+    } else {//其他日志项
+      trx_manager->find_trx(log_entry_iter.log_entry().trx_id())->redo(db, log_entry_iter.log_entry());
+      LOG_DEFAULT("trx_id:%d,redo", log_entry_iter.log_entry().trx_id());
+    }
+    log_entry_iter.next();
+    j++;
+    LOG_DEFAULT("log_entry_iter:%d,valid:%d", j, log_entry_iter.valid());
+  }
+
+  for (const auto& status : trx_status)
+  {
+    if (!status.second)
+    {
+      trx_manager->find_trx(status.first)->rollback();
+      LOG_DEFAULT("trx_id:%d,rollback", status.first);
+    }
+  }
+  LOG_DEFAULT("log recover success");
 
   return RC::SUCCESS;
 }

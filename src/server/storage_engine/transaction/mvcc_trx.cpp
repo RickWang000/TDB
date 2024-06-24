@@ -132,6 +132,10 @@ RC MvccTrx::insert_record(Table *table, Record &record)
       return rc;
   }
 
+  // 添加插入操作的日志
+  log_manager_->append_record_log(LogEntryType::INSERT, trx_id, table->table_id(), record.rid(), record.len(), 0, record.data());
+  LOG_DEFAULT("insert record. trx id=%d, table id=%d, rid=%s", trx_id, table->table_id(), record.rid().to_string().c_str());
+
   pair<OperationSet::iterator, bool> ret = operations_.insert(Operation(Operation::Type::INSERT, table, record.rid()));
   if (!ret.second) {
     rc = RC::INTERNAL;
@@ -153,6 +157,10 @@ RC MvccTrx::delete_record(Table *table, Record &record)
 
   // 设置end_xid为负的事务ID，表示记录即将被删除，但尚未提交
   end_xid_field.set_int(record, -trx_id);
+
+  // 添加删除操作的日志
+  log_manager_->append_record_log(LogEntryType::DELETE, trx_id, table->table_id(), record.rid(), record.len(), 0, record.data());
+  LOG_DEFAULT("delete record. trx id=%d, table id=%d, rid=%s", trx_id, table->table_id(), record.rid().to_string().c_str());
 
   operations_.insert(Operation(Operation::Type::DELETE, table, record.rid()));
   return rc;
@@ -373,6 +381,13 @@ RC MvccTrx::redo(Db *db, const LogEntry &log_entry)
 
       // TODO [Lab5] 需要同学们补充代码，相关提示见文档
 
+      Record record;
+      record.set_rid(record_entry.rid_);
+      record.set_data(record_entry.data_, record_entry.data_len_);
+
+      table = db->find_table(record_entry.table_id_);
+      table->recover_insert_record(record);
+
       operations_.insert(Operation(Operation::Type::INSERT, table, record_entry.rid_));
     } break;
 
@@ -382,6 +397,15 @@ RC MvccTrx::redo(Db *db, const LogEntry &log_entry)
 
       // TODO [Lab5] 需要同学们补充代码，相关提示见文档
 
+      table = db->find_table(record_entry.table_id_);
+      //找到要删除的数据记录
+      table->visit_record(record_entry.rid_, false, [&table, &record_entry, this](Record &record) {
+        //通过修改事务字段实现逻辑删除。
+        Field begin_xid_field, end_xid_field;
+        trx_fields(table, begin_xid_field, end_xid_field);
+        end_xid_field.set_int(record, trx_id_);
+      });
+
       operations_.insert(Operation(Operation::Type::DELETE, table, record_entry.rid_));
     } break;
 
@@ -389,11 +413,19 @@ RC MvccTrx::redo(Db *db, const LogEntry &log_entry)
 
       // TODO [Lab5] 需要同学们补充代码，相关提示见文档
 
+      //获取日志项中的commit_id
+      int32_t commit_id = log_entry.commit_entry().commit_xid_;
+      //完成事务的重新提交
+      commit_with_trx_id(commit_id);
+
     } break;
 
     case LogEntryType::MTR_ROLLBACK: {
 
       // TODO [Lab5] 需要同学们补充代码，相关提示见文档
+
+      //完成事务的回滚
+      rollback();
 
     } break;
 
@@ -402,6 +434,8 @@ RC MvccTrx::redo(Db *db, const LogEntry &log_entry)
       return RC::INTERNAL;
     } break;
   }
+
+  LOG_DEFAULT("$$$mvcc::redo()$$redo log entry. log entry=%s", log_entry.to_string().c_str());
 
   return RC::SUCCESS;
 }
