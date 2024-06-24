@@ -23,6 +23,7 @@
 #include "include/query_engine/planner/node/explain_logical_node.h"
 #include "include/query_engine/planner/operator/explain_physical_operator.h"
 #include "include/query_engine/planner/node/join_logical_node.h"
+#include "include/query_engine/planner/operator/join_physical_operator.h"
 #include "include/query_engine/planner/operator/group_by_physical_operator.h"
 #include "common/log/log.h"
 #include "include/storage_engine/recorder/table.h"
@@ -71,7 +72,9 @@ RC PhysicalOperatorGenerator::create(LogicalNode &logical_operator, unique_ptr<P
       return create_plan(static_cast<ExplainLogicalNode &>(logical_operator), oper, is_delete);
     }
     // TODO [Lab3] 实现JoinNode到JoinOperator的转换
-    case LogicalNodeType::JOIN:
+    case LogicalNodeType::JOIN: {
+      return create_plan(static_cast<JoinLogicalNode &>(logical_operator), oper);
+    }
     case LogicalNodeType::GROUP_BY: {
       return RC::UNIMPLENMENT;
     }
@@ -343,5 +346,39 @@ RC PhysicalOperatorGenerator::create_plan(
 RC PhysicalOperatorGenerator::create_plan(
     JoinLogicalNode &join_oper, unique_ptr<PhysicalOperator> &oper)
 {
-  return RC::UNIMPLENMENT;
+  vector<unique_ptr<LogicalNode>> &child_opers = join_oper.children();
+  unique_ptr<PhysicalOperator> left_child_phy_oper;
+  unique_ptr<PhysicalOperator> right_child_phy_oper;
+
+  RC rc = RC::SUCCESS;
+  if (!child_opers.empty()) {
+    LogicalNode *left_child_oper = child_opers[0].get();
+    LogicalNode *right_child_oper = child_opers[1].get();
+    rc = create(*left_child_oper, left_child_phy_oper);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to create left child physical operator. rc=%s", strrc(rc));
+      return rc;
+    }
+    rc = create(*right_child_oper, right_child_phy_oper);
+    if (rc != RC::SUCCESS) {
+      LOG_WARN("failed to create right child physical operator. rc=%s", strrc(rc));
+      return rc;
+    }
+  }
+
+  auto *join_operator = new JoinPhysicalOperator();
+  join_operator->set_left_operator(left_child_phy_oper.get());
+  join_operator->set_right_operator(right_child_phy_oper.get());
+  join_operator->set_join_condition(join_oper.condition().get()); 
+  if (left_child_phy_oper) {
+    join_operator->add_child(std::move(left_child_phy_oper));
+  }
+  if (right_child_phy_oper) {
+    join_operator->add_child(std::move(right_child_phy_oper));
+  }
+
+  oper = unique_ptr<PhysicalOperator>(join_operator);
+
+  LOG_TRACE("create a join physical operator");
+  return rc;
 }

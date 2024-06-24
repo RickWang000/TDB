@@ -102,18 +102,20 @@ RC LogicalPlanGenerator::plan_node(
   // 1. Table scan node
   //TODO [Lab3] 当前只取一个表作为查询表,当引入Join后需要考虑同时查询多个表的情况
   //参考思路: 遍历tables中的所有Table，针对每个table生成TableGetLogicalNode
-   Table *default_table = tables[0];
-   const char *table_name = default_table->name();
-   std::vector<Field> fields;
-   for (auto *field : all_fields) {
-     if (0 == strcmp(field->table_name(), default_table->name())) {
-       fields.push_back(*field);
-     }
-   }
 
-   root = std::unique_ptr<LogicalNode>(
-       new TableGetLogicalNode(default_table, select_stmt->table_alias()[0], fields, true/*readonly*/));
-
+  std::vector<std::unique_ptr<LogicalNode>> table_nodes;
+  for (auto *table : tables) {
+    const char *table_name = table->name();
+    std::vector<Field> fields;
+    for (auto *field : all_fields) {
+      if (0 == strcmp(field->table_name(), table->name())) {
+        fields.push_back(*field);
+      }
+    }
+    std::unique_ptr<LogicalNode> table_node(
+        new TableGetLogicalNode(table, table->name(), fields, true/*readonly*/));
+    table_nodes.push_back(std::move(table_node));
+  }
   // 2. inner join node
   // TODO [Lab3] 完善Join节点的逻辑计划生成, 需要解析并设置Join涉及的表,以及Join使用到的连接条件
   // 如果只有一个TableGetLogicalNode,直接将其设置为root节点，跳过该阶段
@@ -121,7 +123,27 @@ RC LogicalPlanGenerator::plan_node(
   // 生成JoinLogicalNode可以参考下面的生成流程：
   // * 遍历TableGetLogicalNode
   // * 生成JoinLogicalNode, 通过select_stmt中的join_filter_stmts
-  // ps: 需要考虑table数大于2的情况
+  // ps: 需要考虑table数大于2的情况:为了简单考虑，建议JoinNode只考虑两个子节点的情况，当存在多个table的时候，通过嵌套的方式实现Join
+  // 即：存在两个以上table的时候，先将前两个table进行Join，然后将Join的结果与第三个table进行Join，以此类推
+  if (table_nodes.size() == 1) {
+    root = std::move(table_nodes[0]);
+  } else {
+    std::unique_ptr<LogicalNode> join_node;
+    for (int i = 0; i < table_nodes.size(); i++) {
+      if (i == 0) {
+        join_node = std::move(table_nodes[i]);
+      } else {
+        std::unique_ptr<JoinLogicalNode> join_logical_node(new JoinLogicalNode);
+        join_logical_node->set_left_child(std::move(join_node));
+        join_logical_node->set_right_child(std::move(table_nodes[i]));
+        FilterStmt *join_filter_stmt = select_stmt->join_filter_stmts()[i - 1];
+        unique_ptr<ConjunctionExpr> join_expr = _transfer_filter_stmt_to_expr(join_filter_stmt);
+        join_logical_node->set_condition(std::move(join_expr));
+        join_node = std::move(join_logical_node);
+      }
+    }
+    root = std::move(join_node);
+  }
 
 
   // 3. Table filter node
